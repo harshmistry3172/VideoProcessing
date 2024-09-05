@@ -46,13 +46,13 @@ public class FrameProcessor implements RendererObserver, ObserverSubject<FramePr
             mMediaFormat = mMediaExtractor.getTrackFormat(videoTrackIndex);
             int width = mMediaFormat.getInteger(MediaFormat.KEY_WIDTH);
             int height = mMediaFormat.getInteger(MediaFormat.KEY_HEIGHT);
-            int rotation = mMediaFormat.getInteger(MediaFormat.KEY_ROTATION);
-            if (rotation==90 || rotation==270)
-            {
-                int temp = width;
-                width = height;
-                height = temp;
-            }
+//            int rotation = mMediaFormat.getInteger(MediaFormat.KEY_ROTATION);
+//            if (rotation==90 || rotation==270)
+//            {
+//                int temp = width;
+//                width = height;
+//                height = temp;
+//            }
             mRenderingContext = new CustomContext(context, width, height, maxFrames, appName);
             mRenderingContext.registerObserver(this);
             renderingHandler.post(new Runnable() {

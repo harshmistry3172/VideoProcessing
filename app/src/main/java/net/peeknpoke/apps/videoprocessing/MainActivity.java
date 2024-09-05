@@ -11,7 +11,9 @@ import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.ProgressBar;
+import android.widget.TextView;
 import android.widget.VideoView;
 
 import net.peeknpoke.apps.frameprocessor.FrameProcessor;
@@ -31,6 +33,10 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
     private FrameProcessor mFrameProcessor;
     private Uri mVideoUri;
     private ProgressBar mProgressBar;
+    private EditText mFramesInput;
+    private TextView mProcessingTime;
+    private long mStartTime;
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -41,6 +47,8 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
         mVideoView = findViewById(R.id.videoView);
         mProcessButton = findViewById(R.id.process);
         mProgressBar = findViewById(R.id.processingBar);
+        mFramesInput = findViewById(R.id.framesInput);
+        mProcessingTime = findViewById(R.id.processingTime);
     }
 
     public void onLoad(View view)
@@ -51,11 +59,20 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
 
     public void onProcess(View view)
     {
+        String framesText = mFramesInput.getText().toString();
+        if (framesText.isEmpty()) {
+            // Optionally, show a toast message or error if no frames input
+            return;
+        }
         mProgressBar.bringToFront();
         mProgressBar.setVisibility(View.VISIBLE);
+        int numberOfFrames = Integer.parseInt(framesText);
+        mProgressBar.bringToFront();
+        mProgressBar.setVisibility(View.VISIBLE);
+        mStartTime = System.currentTimeMillis(); // Record start time
         try {
             mFrameProcessor = new FrameProcessor(getApplicationContext(), mVideoUri,
-                    getResources().getInteger(R.integer.MAX_FRAMES),
+                    numberOfFrames,
                     getResources().getString(R.string.app_name));
             mFrameProcessor.registerObserver(this);
         } catch (IOException e) {
@@ -119,5 +136,8 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
     public void doneProcessing() {
         mFrameProcessor.removeObserver(this);
         runOnUiThread(() -> mProgressBar.setVisibility(View.INVISIBLE));
+        long endTime = System.currentTimeMillis();
+        long duration = (endTime - mStartTime); // Convert to seconds
+        mProcessingTime.setText("Processing Time: " + duration + "ms");
     }
 }
