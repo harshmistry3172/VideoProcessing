@@ -4,10 +4,15 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 
+import android.app.ActivityManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.format.Formatter;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
@@ -20,11 +25,15 @@ import net.peeknpoke.apps.frameprocessor.FrameProcessor;
 import net.peeknpoke.apps.frameprocessor.FrameProcessorObserver;
 import net.peeknpoke.apps.videoprocessing.permissions.StoragePermissionHandler;
 
+import java.io.BufferedReader;
+import java.io.FileReader;
 import java.io.IOException;
+import java.lang.ref.WeakReference;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
 
 public class MainActivity extends AppCompatActivity implements FrameProcessorObserver {
     private static final String TAG = MainActivity.class.getSimpleName();
-
     private static final int PICK_FROM_GALLERY = 1;
     private StoragePermissionHandler mStoragePermissionHandler;
 
@@ -35,8 +44,8 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
     private ProgressBar mProgressBar;
     private EditText mFramesInput;
     private TextView mProcessingTime;
+    private TextView mCpuUsageTextView;
     private long mStartTime;
-
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -49,16 +58,18 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
         mProgressBar = findViewById(R.id.processingBar);
         mFramesInput = findViewById(R.id.framesInput);
         mProcessingTime = findViewById(R.id.processingTime);
+        mCpuUsageTextView = findViewById(R.id.cpuUsage);
+
+        // Start monitoring CPU usage
+        startCpuUsageMonitoring();
     }
 
-    public void onLoad(View view)
-    {
+    public void onLoad(View view) {
         Intent galleryIntent = new Intent(Intent.ACTION_PICK, android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI);
         startActivityForResult(galleryIntent, PICK_FROM_GALLERY);
     }
 
-    public void onProcess(View view)
-    {
+    public void onProcess(View view) {
         String framesText = mFramesInput.getText().toString();
         if (framesText.isEmpty()) {
             // Optionally, show a toast message or error if no frames input
@@ -67,8 +78,6 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
         mProgressBar.bringToFront();
         mProgressBar.setVisibility(View.VISIBLE);
         int numberOfFrames = Integer.parseInt(framesText);
-        mProgressBar.bringToFront();
-        mProgressBar.setVisibility(View.VISIBLE);
         mStartTime = System.currentTimeMillis(); // Record start time
         try {
             mFrameProcessor = new FrameProcessor(getApplicationContext(), mVideoUri,
@@ -83,8 +92,7 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
     @Override
     protected void onPause() {
         super.onPause();
-        if (mFrameProcessor!=null)
-        {
+        if (mFrameProcessor != null) {
             mFrameProcessor.release();
         }
     }
@@ -106,8 +114,7 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults)
-    {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         if (requestCode != StoragePermissionHandler.CODE) {
             Log.d(TAG, "Got unexpected permission result: " + requestCode);
             super.onRequestPermissionsResult(requestCode, permissions, grantResults);
@@ -115,8 +122,7 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
         }
 
         if (grantResults.length != 0) {
-            if (grantResults[0] == PackageManager.PERMISSION_DENIED)
-            {
+            if (grantResults[0] == PackageManager.PERMISSION_DENIED) {
                 mStoragePermissionHandler.checkAndRequestPermission(this, requestCode);
 
                 Log.e(TAG, "Permission not granted: results len = " + grantResults.length +
@@ -137,7 +143,44 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
         mFrameProcessor.removeObserver(this);
         runOnUiThread(() -> mProgressBar.setVisibility(View.INVISIBLE));
         long endTime = System.currentTimeMillis();
-        long duration = (endTime - mStartTime); // Convert to seconds
-        mProcessingTime.setText("Processing Time: " + duration + "ms");
+        long processingTime = endTime - mStartTime;
+        runOnUiThread(() -> mProcessingTime.setText("Processing Time: " + processingTime + "ms"));
+    }
+
+    // Method to get CPU usage
+    private float getCpuUsage() {
+        try {
+            ActivityManager activityManager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            ActivityManager.MemoryInfo memoryInfo = new ActivityManager.MemoryInfo();
+            activityManager.getMemoryInfo(memoryInfo);
+
+            long totalMem = memoryInfo.totalMem;
+            long availMem = memoryInfo.availMem;
+            long usedMem = totalMem - availMem;
+
+            // Simple calculation for demonstration
+            return (usedMem / (float) totalMem) * 100;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return 0;
+        }
+    }
+
+    // Method to periodically update CPU usage
+    private void startCpuUsageMonitoring() {
+        final Handler handler = new Handler(Looper.getMainLooper());
+        final Runnable updateCpuUsageRunnable = new Runnable() {
+            @Override
+            public void run() {
+                float cpuUsage = getCpuUsage();
+                mCpuUsageTextView.setText(String.format("RAM Usage: %.2f%%", cpuUsage));
+
+                // Update every 2 seconds
+                handler.postDelayed(this, 50);
+            }
+        };
+
+        // Start the monitoring
+        handler.post(updateCpuUsageRunnable);
     }
 }
