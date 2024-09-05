@@ -1,18 +1,16 @@
+
 package net.peeknpoke.apps.videoprocessing;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 
-import android.app.ActivityManager;
-import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.text.format.Formatter;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
@@ -26,11 +24,9 @@ import net.peeknpoke.apps.frameprocessor.FrameProcessorObserver;
 import net.peeknpoke.apps.videoprocessing.permissions.StoragePermissionHandler;
 
 import java.io.BufferedReader;
-import java.io.FileReader;
+import java.io.DataOutputStream;
 import java.io.IOException;
-import java.lang.ref.WeakReference;
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
+import java.io.InputStreamReader;
 
 public class MainActivity extends AppCompatActivity implements FrameProcessorObserver {
     private static final String TAG = MainActivity.class.getSimpleName();
@@ -46,6 +42,8 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
     private TextView mProcessingTime;
     private TextView mCpuUsageTextView;
     private long mStartTime;
+    private long mLastCpuTotalTime = 0;
+    private long mLastCpuIdleTime = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -147,20 +145,50 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
         runOnUiThread(() -> mProcessingTime.setText("Processing Time: " + processingTime + "ms"));
     }
 
-    // Method to get CPU usage
+    // Method to get CPU utilization with root access
     private float getCpuUsage() {
         try {
-            ActivityManager activityManager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
-            ActivityManager.MemoryInfo memoryInfo = new ActivityManager.MemoryInfo();
-            activityManager.getMemoryInfo(memoryInfo);
+            // Execute shell command with root access
+            Process process = Runtime.getRuntime().exec("su");
+            DataOutputStream os = new DataOutputStream(process.getOutputStream());
+            os.writeBytes("cat /proc/stat\n");
+            os.writeBytes("exit\n");
+            os.flush();
+            os.close();
 
-            long totalMem = memoryInfo.totalMem;
-            long availMem = memoryInfo.availMem;
-            long usedMem = totalMem - availMem;
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            String line = reader.readLine();
+            System.out.println("CPU Usage" + line);
+            reader.close();
 
-            // Simple calculation for demonstration
-            return (usedMem / (float) totalMem) * 100;
-        } catch (Exception e) {
+            if (line == null) {
+                return 0;
+            }
+
+            String[] toks = line.split(" ");
+            long totalCpuTime = 0;
+            long idleCpuTime = 0;
+
+            for (int i = 2; i < toks.length; i++) {
+                totalCpuTime += Long.parseLong(toks[i]);
+            }
+
+            idleCpuTime = Long.parseLong(toks[4]);
+
+            if (mLastCpuTotalTime == 0 && mLastCpuIdleTime == 0) {
+                mLastCpuTotalTime = totalCpuTime;
+                mLastCpuIdleTime = idleCpuTime;
+                return 0;
+            }
+
+            long totalDelta = totalCpuTime - mLastCpuTotalTime;
+            long idleDelta = idleCpuTime - mLastCpuIdleTime;
+
+            mLastCpuTotalTime = totalCpuTime;
+            mLastCpuIdleTime = idleCpuTime;
+
+            return (totalDelta == 0) ? 0 : (1 - (idleDelta / (float) totalDelta)) * 100;
+        } catch (IOException e) {
             e.printStackTrace();
             return 0;
         }
@@ -173,10 +201,10 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
             @Override
             public void run() {
                 float cpuUsage = getCpuUsage();
-                mCpuUsageTextView.setText(String.format("RAM Usage: %.2f%%", cpuUsage));
+                mCpuUsageTextView.setText(String.format("CPU Usage: %.2f%%", cpuUsage));
 
                 // Update every 2 seconds
-                handler.postDelayed(this, 50);
+                handler.postDelayed(this, 100);
             }
         };
 
@@ -184,3 +212,4 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
         handler.post(updateCpuUsageRunnable);
     }
 }
+
