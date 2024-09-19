@@ -1,10 +1,12 @@
-
 package net.peeknpoke.apps.videoprocessing;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
+import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -25,14 +27,19 @@ import net.peeknpoke.apps.videoprocessing.permissions.StoragePermissionHandler;
 
 import java.io.BufferedReader;
 import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity implements FrameProcessorObserver {
     private static final String TAG = MainActivity.class.getSimpleName();
     private static final int PICK_FROM_GALLERY = 1;
-    private StoragePermissionHandler mStoragePermissionHandler;
+    private static final int PERMISSION_REQUEST_CODE = 100;
 
+    private StoragePermissionHandler mStoragePermissionHandler;
     private VideoView mVideoView;
     private Button mProcessButton;
     private FrameProcessor mFrameProcessor;
@@ -44,6 +51,9 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
     private long mStartTime;
     private long mLastCpuTotalTime = 0;
     private long mLastCpuIdleTime = 0;
+
+    private ExecutorService mExecutorService;
+    private Runnable mCpuUsageRunnable;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -58,8 +68,21 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
         mProcessingTime = findViewById(R.id.processingTime);
         mCpuUsageTextView = findViewById(R.id.cpuUsage);
 
-        // Start monitoring CPU usage
+        mExecutorService = Executors.newSingleThreadExecutor();
+
+        // Initialize CSV file with a start entry
+        initializeCsvFile();
+
+        // Start CPU usage monitoring as soon as the app starts
         startCpuUsageMonitoring();
+
+        // Check and request storage permissions if needed
+        checkStoragePermission();
+    }
+
+    private void initializeCsvFile() {
+        // Write an entry to the CSV file indicating the app start state
+        writeToCsv(System.currentTimeMillis() + ",0," + getCpuUsage());
     }
 
     public void onLoad(View view) {
@@ -77,11 +100,15 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
         mProgressBar.setVisibility(View.VISIBLE);
         int numberOfFrames = Integer.parseInt(framesText);
         mStartTime = System.currentTimeMillis(); // Record start time
+
         try {
             mFrameProcessor = new FrameProcessor(getApplicationContext(), mVideoUri,
                     numberOfFrames,
                     getResources().getString(R.string.app_name));
             mFrameProcessor.registerObserver(this);
+
+            // Write entry to CSV file with process state as 1
+            writeToCsv(System.currentTimeMillis() + ",1," + getCpuUsage());
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -113,36 +140,43 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
 
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        if (requestCode != StoragePermissionHandler.CODE) {
+        if (requestCode != PERMISSION_REQUEST_CODE) {
             Log.d(TAG, "Got unexpected permission result: " + requestCode);
             super.onRequestPermissionsResult(requestCode, permissions, grantResults);
             return;
         }
 
-        if (grantResults.length != 0) {
-            if (grantResults[0] == PackageManager.PERMISSION_DENIED) {
-                mStoragePermissionHandler.checkAndRequestPermission(this, requestCode);
-
-                Log.e(TAG, "Permission not granted: results len = " + grantResults.length +
-                        " Result code = " + grantResults[0]);
-                finish();
-            }
+        if (grantResults.length != 0 && grantResults[0] == PackageManager.PERMISSION_DENIED) {
+            Log.e(TAG, "Permission not granted: results len = " + grantResults.length +
+                    " Result code = " + grantResults[0]);
+            finish();
         }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        mStoragePermissionHandler.checkAndRequestPermission(MainActivity.this, StoragePermissionHandler.CODE);
+        checkStoragePermission();
     }
 
     @Override
     public void doneProcessing() {
-        mFrameProcessor.removeObserver(this);
-        runOnUiThread(() -> mProgressBar.setVisibility(View.INVISIBLE));
-        long endTime = System.currentTimeMillis();
-        long processingTime = endTime - mStartTime;
-        runOnUiThread(() -> mProcessingTime.setText("Processing Time: " + processingTime + "ms"));
+        Log.d(TAG, "doneProcessing called");
+        runOnUiThread(() -> {
+            mFrameProcessor.removeObserver(this);
+            mProgressBar.setVisibility(View.INVISIBLE);
+
+            long endTime = System.currentTimeMillis();
+            long processingTime = endTime - mStartTime;
+            mProcessingTime.setText("Processing Time: " + processingTime + "ms");
+
+            // Stop CPU usage monitoring and write final entry to CSV file
+            stopCpuUsageMonitoring();
+
+            // Write final CSV entry with process state as 0
+            Log.d(TAG, "Writing final entry to CSV");
+            writeToCsv(System.currentTimeMillis() + ",0," + getCpuUsage()); // Log the process stopped state
+        });
     }
 
     // Method to get CPU utilization with root access
@@ -158,7 +192,6 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
 
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
             String line = reader.readLine();
-            System.out.println("CPU Usage" + line);
             reader.close();
 
             if (line == null) {
@@ -194,22 +227,70 @@ public class MainActivity extends AppCompatActivity implements FrameProcessorObs
         }
     }
 
-    // Method to periodically update CPU usage
+    // Method to get the CSV file
+    private File getCsvFile() {
+        File directory = getExternalFilesDir(null); // Use getExternalFilesDir() for app-specific directory
+        return new File(directory, "cpu_usage.csv");
+    }
+
+    // Method to write a line to the CSV file
+    private void writeToCsv(String line) {
+        File csvFile = getCsvFile();
+        try (FileWriter writer = new FileWriter(csvFile, true)) {
+            writer.append(line).append("\n");
+            Log.d(TAG, "Written to CSV: " + line);
+        } catch (IOException e) {
+            Log.e(TAG, "Error writing to CSV", e);
+        }
+    }
+
+    // Method to start CPU usage monitoring
     private void startCpuUsageMonitoring() {
-        final Handler handler = new Handler(Looper.getMainLooper());
-        final Runnable updateCpuUsageRunnable = new Runnable() {
-            @Override
-            public void run() {
-                float cpuUsage = getCpuUsage();
-                mCpuUsageTextView.setText(String.format("CPU Usage: %.2f%%", cpuUsage));
+        if (mCpuUsageRunnable == null) {
+            mCpuUsageRunnable = new Runnable() {
+                @Override
+                public void run() {
+                    while (!Thread.currentThread().isInterrupted()) {
+                        final float cpuUsage = getCpuUsage();
+                        runOnUiThread(() -> mCpuUsageTextView.setText("CPU Usage: " + cpuUsage));
+                        // Write to CSV file on background thread
+                        writeToCsv(System.currentTimeMillis() + "," + (mFrameProcessor != null ? "1" : "0") + "," + cpuUsage);
 
-                // Update every 2 seconds
-                handler.postDelayed(this, 100);
-            }
-        };
+                        try {
+                            Thread.sleep(100); // Adjust the interval as needed
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                }
+            };
 
-        // Start the monitoring
-        handler.post(updateCpuUsageRunnable);
+            mExecutorService.submit(mCpuUsageRunnable);
+        }
+    }
+
+    // Method to stop CPU usage monitoring
+    private void stopCpuUsageMonitoring() {
+        if (mCpuUsageRunnable != null) {
+            mExecutorService.shutdownNow();
+            mCpuUsageRunnable = null;
+        }
+    }
+
+    // Check and request storage permissions if needed
+    private void checkStoragePermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, PERMISSION_REQUEST_CODE);
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        stopCpuUsageMonitoring(); // Ensure monitoring is stopped
+        if (mExecutorService != null) {
+            mExecutorService.shutdownNow();
+        }
     }
 }
-
